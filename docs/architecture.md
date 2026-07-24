@@ -109,7 +109,7 @@ sequenceDiagram
     Flask->>Scanner: scan_notes() → find "Tax 2026"
     Flask->>Vault: read Tax 2026.md
     Flask->>Markdown: convert to HTML
-    Flask->>Flask: convert [[wikilinks]] to &lt;a&gt;
+    Flask->>Flask: convert wikilinks to links
     Flask-->>Browser: Full HTML page with sidebar + backlinks
     Browser->>Browser: JS loads /api/backlinks/Tax 2026
     Browser->>Browser: JS renders backlinks panel

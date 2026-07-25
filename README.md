@@ -68,3 +68,19 @@ MIT — see [LICENSE](LICENSE).
 
 - [Obsidian](https://obsidian.md) — the desktop app this viewer complements
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) — the AI agent that manages this vault
+
+## Mermaid Diagrams
+
+VaultView renders [Mermaid](https://mermaid.js.org) diagrams inline. Just add a `mermaid` code block to any note:
+
+````markdown
+```mermaid
+graph TD
+    A[Start] --> B[Process]
+    B --> C[End]
+```
+````
+
+Click any diagram to view it full-screen. Perfect for architecture docs, flowcharts, and system designs.
+
+![Mermaid diagram](docs/screenshots/mermaid.png)

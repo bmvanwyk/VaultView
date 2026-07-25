@@ -5,10 +5,11 @@ Serves markdown with [[wikilink]] support, nested file tree,
 backlinks, and interactive graph view.
 """
 import os, re, json
+from datetime import datetime
 from pathlib import Path
 from functools import wraps
 from collections import defaultdict
-from flask import Flask, request, redirect, url_for, jsonify, abort, Response
+from flask import Flask, request, redirect, url_for, jsonify, abort, Response, session, make_response
 
 VAULT_PATH = os.environ.get("OBSIDIAN_VAULT_PATH", os.path.expanduser("~/Documents/Obsidian Vault"))
 PORT = int(os.environ.get("VAULT_VIEWER_PORT", "9120"))
@@ -16,6 +17,7 @@ AUTH_USER = os.environ.get("VAULT_VIEWER_USER", "hermes")
 AUTH_PASS = os.environ.get("VAULT_VIEWER_PASS", "hermes")
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("VAULT_VIEWER_SECRET", os.urandom(24).hex())
 
 import markdown
 md = markdown.Markdown(extensions=['fenced_code', 'tables', 'codehilite'])
@@ -23,17 +25,74 @@ md = markdown.Markdown(extensions=['fenced_code', 'tables', 'codehilite'])
 def check_auth(username, password):
     return username == AUTH_USER and password == AUTH_PASS
 
-def authenticate():
-    return Response('Access denied', 401, {'WWW-Authenticate': 'Basic realm="VaultView"'})
-
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
-        return f(*args, **kwargs)
+        if session.get('logged_in'):
+            return f(*args, **kwargs)
+        return redirect(url_for('login_page'))
     return decorated
+
+# ── Login / Logout ──────────────────────────────────────────
+LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>VaultView — Unlock</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#161b22;border:1px solid #30363d;border-radius:16px;padding:36px 32px;
+  width:340px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.4)}
+.logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(145deg,#7c3aed,#a78bfa);
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:22px;color:#fff;
+  margin:0 auto 12px}
+h1{font-size:18px;font-weight:600;margin-bottom:4px;color:#f0f6fc}
+.sub{font-size:12px;color:#8b949e;margin-bottom:24px}
+input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid #30363d;
+  background:#0d1117;color:#c9d1d9;font-size:14px;outline:none;margin-bottom:12px}
+input:focus{border-color:#7c3aed;box-shadow:0 0 0 3px #7c3aed22}
+button{width:100%;padding:10px;border-radius:10px;border:none;background:#7c3aed;
+  color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+button:hover{opacity:.9}
+.error{color:#f85149;font-size:12px;margin-bottom:12px;display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📓</div>
+  <h1>Unlock Your Vault</h1>
+  <p class="sub">Enter your password to continue</p>
+  <form method="post" action="/login">
+    <input type="password" name="password" placeholder="Password" autofocus>
+    <p class="error" id="error">Wrong password</p>
+    <button type="submit">🔓 Unlock</button>
+  </form>
+</div>
+<script>
+const params = new URLSearchParams(window.location.search);
+if (params.get('error')) document.getElementById('error').style.display = 'block';
+</script>
+</body>
+</html>"""
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if request.method == 'POST':
+        if request.form.get('password') == AUTH_PASS:
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        return redirect('/login?error=1')
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return LOGIN_PAGE
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
 
 # ── Data layer ──────────────────────────────────────────────
 def scan_notes():
@@ -140,7 +199,49 @@ def api_backlinks(name):
     notes = scan_notes()
     return jsonify(build_backlinks(notes, name))
 
-# ── Page Routes ──────────────────────────────────────────────
+@app.route('/api/raw/<path:name>')
+@requires_auth
+def api_raw(name):
+    """Return raw markdown content of a note."""
+    name = name.replace('%20', ' ')
+    notes = scan_notes()
+    for note_name, data in notes.items():
+        if note_name == name or data['path'] == name or data['path'] == f"{name}.md":
+            filepath = Path(VAULT_PATH) / data['path']
+            if filepath.exists():
+                return Response(filepath.read_text(), mimetype='text/plain')
+    return 'Note not found', 404
+
+@app.route('/api/save/<path:name>', methods=['POST'])
+@requires_auth
+def api_save(name):
+    """Save edited markdown content back to a note."""
+    name = name.replace('%20', ' ')
+    notes = scan_notes()
+    
+    filepath = None
+    for note_name, data in notes.items():
+        if note_name == name or data['path'] == name or data['path'] == f"{name}.md":
+            filepath = Path(VAULT_PATH) / data['path']
+            break
+    
+    if filepath is None:
+        return jsonify({'error': 'Note not found'}), 404
+    
+    content = request.get_json().get('content', '')
+    filepath.write_text(content)
+    
+    # Log the edit so Aegis knows
+    edit_log = Path(os.path.expanduser("~/.hermes/data/vault_edits.jsonl"))
+    edit_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(edit_log, 'a') as f:
+        f.write(json.dumps({
+            'note': name,
+            'time': datetime.utcnow().isoformat(),
+            'size': len(content)
+        }) + '\n')
+    
+    return jsonify({'status': 'saved', 'note': name})
 @app.route('/')
 @requires_auth
 def index():
@@ -266,6 +367,14 @@ body {{
 }}
 .file-tree a:hover {{ background: var(--hover); }}
 .file-tree a.active {{ background: var(--accent); color: #fff; font-weight: 600; }}
+.sidebar-footer {{
+  padding: 12px 16px; border-top: 1px solid var(--border);
+}}
+.logout-link {{
+  display: block; padding: 6px 10px; color: #8b949e; text-decoration: none;
+  border-radius: 6px; font-size: 13px;
+}}
+.logout-link:hover {{ background: var(--hover); color: #f85149; }}
 /* ── Center: Content ── */
 .content {{
   margin-left: 260px; padding: 32px 48px; max-width: 900px;
@@ -313,6 +422,68 @@ body {{
 .backlink-item:hover {{ background: var(--hover); }}
 .backlink-item::before {{ content: "← "; color: #8b949e; }}
 .panel-empty {{ font-size: 12px; color: #8b949e; }}
+/* ── Edit mode ── */
+.edit-bar {{
+  display: flex; gap: 8px; margin-bottom: 16px;
+}}
+.edit-btn, .save-btn, .cancel-btn {{
+  padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border);
+}}
+.edit-btn {{ background: var(--accent); color: #fff; border-color: var(--accent); }}
+.save-btn {{ background: #238636; color: #fff; border-color: #238636; display: none; }}
+.cancel-btn {{ background: transparent; color: var(--text); display: none; }}
+.edit-btn:hover, .save-btn:hover {{ opacity: 0.85; }}
+.cancel-btn:hover {{ background: var(--hover); }}
+.edit-textarea {{
+  display: none; width: 100%; min-height: 500px; background: #0d1117;
+  color: #e6edf3; border: 1px solid var(--border); border-radius: 8px;
+  padding: 20px; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 14px; line-height: 1.7; resize: vertical; outline: none;
+  tab-size: 4;
+}}
+.edit-textarea:focus {{ border-color: var(--accent); box-shadow: 0 0 0 3px #7c3aed22; }}
+.edit-textarea.active {{ display: block; }}
+.edit-mode .save-btn, .edit-mode .cancel-btn {{ display: inline-block; }}
+.edit-mode .edit-btn {{ display: none; }}
+.edit-mode .rendered-content {{ display: none; }}
+/* Full-screen overlay editing */
+.edit-overlay {{
+  display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: #0d1117; z-index: 500; flex-direction: column;
+}}
+.edit-overlay.show {{ display: flex; }}
+.edit-overlay-toolbar {{
+  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+  background: #161b22; border-bottom: 1px solid var(--border);
+}}
+.edit-overlay-toolbar span {{ color: var(--heading); font-weight: 600; font-size: 14px; }}
+.edit-overlay-toolbar .spacer {{ flex: 1; }}
+.edit-overlay-toolbar button {{
+  padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border);
+}}
+.edit-overlay-save {{ background: #238636; color: #fff; border-color: #238636; }}
+.edit-overlay-cancel {{ background: transparent; color: var(--text); }}
+.edit-overlay-save:hover {{ opacity: 0.85; }}
+.edit-overlay-cancel:hover {{ background: var(--hover); }}
+.edit-overlay textarea {{
+  flex: 1; width: 100%; background: #0d1117; color: #e6edf3;
+  border: none; padding: 24px 32px; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 15px; line-height: 1.8; resize: none; outline: none;
+  tab-size: 4;
+}}
+.edit-overlay textarea:focus {{ border: none; outline: none; }}
+.edit-overlay-hint {{
+  padding: 8px 20px; font-size: 11px; color: #8b949e;
+  border-top: 1px solid var(--border);
+}}
+.saved-toast {{
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: #238636; color: #fff; padding: 10px 20px; border-radius: 8px;
+  font-size: 14px; z-index: 300; opacity: 0; transition: opacity 0.3s;
+}}
+.saved-toast.show {{ opacity: 1; }}
 /* ── Search ── */
 .search-results p {{ margin-bottom: 16px; color: #8b949e; }}
 .search-result {{
@@ -372,12 +543,32 @@ mark {{ background: #bb800944; color: inherit; padding: 1px 3px; border-radius: 
   <nav class="file-tree" id="fileTree">
     {_render_file_tree(build_file_tree(), '')}
   </nav>
+  <div class="sidebar-footer">
+    <a href="/logout" class="logout-link">🔒 Lock vault</a>
+  </div>
 </aside>
 
 <!-- Center: Content -->
 <main class="content">
+  <div class="edit-bar">
+    <button class="edit-btn" onclick="startEdit()">✏️ Edit</button>
+  </div>
+  <div class="rendered-content">
   {content}
+  </div>
 </main>
+
+<!-- Full-screen Edit Overlay -->
+<div class="edit-overlay" id="editOverlay">
+  <div class="edit-overlay-toolbar">
+    <span>✏️ Editing: {current or 'Note'}</span>
+    <span class="spacer"></span>
+    <button class="edit-overlay-cancel" onclick="cancelEdit()">Cancel</button>
+    <button class="edit-overlay-save" onclick="saveEdit()">💾 Save</button>
+  </div>
+  <textarea id="editTextarea" placeholder="Write markdown here..."></textarea>
+  <div class="edit-overlay-hint">🖱️ Markdown — [[wikilinks]] supported · Ctrl+S to save · Esc to cancel</div>
+</div>
 
 <!-- Right: Backlinks -->
 <aside class="panel" id="backlinksPanel">
@@ -399,6 +590,19 @@ mark {{ background: #bb800944; color: inherit; padding: 1px 3px; border-radius: 
   <svg id="graphSvg"></svg>
   <div class="graph-hint">🖱️ Scroll to zoom · Drag to pan · Click node to open</div>
 </div>
+
+<!-- Mermaid JS for diagram rendering -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+  primaryColor: '#7c3aed', primaryTextColor: '#c9d1d9',
+  lineColor: '#58a6ff', secondaryColor: '#1a1a2e',
+  tertiaryColor: '#161b22', background: '#0d1117',
+  mainBkg: '#161b22', nodeBorder: '#30363d',
+  clusterBkg: '#161b22', titleColor: '#f0f6fc',
+  edgeLabelBackground: '#161b22'
+} });
+</script>
 
 <script>
 // File tree toggle
@@ -591,6 +795,81 @@ window.addEventListener('keydown', function(e) {{
     hideGraph();
   }}
 }});
+
+// ── Edit mode (full-screen overlay) ──
+let rawMarkdown = '';
+let currentNoteName = "{current or ''}";
+
+function startEdit() {{
+  const overlay = document.getElementById('editOverlay');
+  overlay.classList.add('show');
+  document.body.style.overflow = 'hidden';
+  const ta = document.getElementById('editTextarea');
+  
+  if (!rawMarkdown && currentNoteName) {{
+    fetch('/api/raw/' + encodeURIComponent(currentNoteName))
+      .then(r => r.text())
+      .then(text => {{
+        rawMarkdown = text;
+        ta.value = rawMarkdown;
+        ta.focus();
+      }});
+  }} else {{
+    ta.value = rawMarkdown;
+    ta.focus();
+  }}
+}}
+
+function saveEdit() {{
+  const ta = document.getElementById('editTextarea');
+  const newContent = ta.value;
+  fetch('/api/save/' + encodeURIComponent(currentNoteName), {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{content: newContent}})
+  }})
+  .then(r => r.json())
+  .then(data => {{
+    if (data.status === 'saved') {{
+      rawMarkdown = newContent;
+      document.getElementById('editOverlay').classList.remove('show');
+      document.body.style.overflow = '';
+      showToast('✅ Saved!');
+      setTimeout(() => location.reload(), 400);
+    }}
+  }});
+}}
+
+function cancelEdit() {{
+  document.getElementById('editOverlay').classList.remove('show');
+  document.body.style.overflow = '';
+}}
+
+// Ctrl+S to save, Esc to cancel
+document.addEventListener('keydown', function(e) {{
+  const overlay = document.getElementById('editOverlay');
+  if (!overlay.classList.contains('show')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {{
+    e.preventDefault();
+    saveEdit();
+  }}
+  if (e.key === 'Escape') {{
+    cancelEdit();
+  }}
+}});
+
+function showToast(msg) {{
+  let toast = document.getElementById('savedToast');
+  if (!toast) {{
+    toast = document.createElement('div');
+    toast.id = 'savedToast';
+    toast.className = 'saved-toast';
+    document.body.appendChild(toast);
+  }}
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2000);
+}}
 </script>
 </body>
 </html>'''

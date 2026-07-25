@@ -16,3 +16,15 @@ Welcome to VaultView! Here's how to get the most out of it.
 - The **backlinks panel** shows which notes link here
 - Notes auto-sync to git every hour (if configured)
 - Works on mobile too!
+
+## Diagrams
+
+VaultView renders Mermaid diagrams inline:
+
+```mermaid
+graph TD
+    A[Markdown] --> B[Python-Markdown]
+    B --> C[HTML]
+    C --> D[Mermaid.js]
+    D --> E[SVG Diagram]
+```

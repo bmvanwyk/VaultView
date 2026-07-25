@@ -206,3 +206,17 @@ For vaults under ~1,000 notes, re-scanning on every request is fast enough (< 10
 - HTTPS via Let's Encrypt
 - Docker image
 - Obsidian plugin compatibility (Dataview, etc.)
+
+---
+
+## Mermaid Diagram Rendering
+
+VaultView renders Mermaid diagrams client-side. The flow:
+
+1. `render_markdown()` pre-processes ```` ```mermaid ```` blocks into `<pre class="mermaid">` HTML
+2. Python-Markdown skips these blocks (they're already HTML)
+3. Mermaid.js (loaded from CDN) finds all `<pre class="mermaid">` elements and renders them as SVG
+4. A click handler expands diagrams to full-screen overlay
+5. CSS ensures diagrams fit within the content area (`max-width: 100%`)
+
+This avoids the codehilite extension mangling mermaid syntax by intercepting blocks before markdown processing.

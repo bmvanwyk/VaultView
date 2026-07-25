@@ -1,8 +1,6 @@
 # VaultView
 
-A lightweight, self-hosted web viewer for [Obsidian](https://obsidian.md) vaults.
-
-Read your notes from any browser — nested file tree, [[wikilink]] navigation, backlinks panel, full-text search, and an interactive graph view. One Python file, zero build step.
+A lightweight, self-hosted web viewer and editor for [Obsidian](https://obsidian.md) vaults. Browse, search, edit, and visualize your notes — from any browser.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
@@ -15,14 +13,21 @@ Read your notes from any browser — nested file tree, [[wikilink]] navigation, 
 - 🔙 **Backlinks panel** — see which notes link to the current one (auto-hides when empty)
 - 🔍 **Full-text search** — with highlighted results across all notes
 - 🕸️ **Interactive graph view** — hub-and-spoke layout, zoom and pan, click to navigate
+- ✏️ **Full-screen editor** — edit markdown with Ctrl+S, Esc to cancel
+- 🔓 **Session login** — dark-themed unlock screen, proper logout
 - 🌙 **Dark theme** — CSS custom properties, easy on the eyes
 - 📱 **Mobile-friendly** — responsive layout, works on phones
-- 🔒 **Basic auth** — password protected
 - 🐍 **Single file** — one `app.py`, vanilla JS, no bundler
 
 ## Screenshots
 
-*Coming soon — PRs welcome!*
+| Vault Browser | Graph View | Editor |
+|--------------|------------|--------|
+| ![vault](docs/screenshots/vault.png) | ![graph](docs/screenshots/graph.png) | ![edit](docs/screenshots/edit.png) |
+
+| Login Screen | Search | Backlinks |
+|-------------|--------|-----------|
+| ![login](docs/screenshots/login.png) | ![search](docs/screenshots/search.png) | ![backlinks](docs/screenshots/backlinks.png) |
 
 ## Quick Start
 
@@ -35,7 +40,7 @@ pip install -r requirements.txt
 OBSIDIAN_VAULT_PATH=~/my-vault python3 app.py
 ```
 
-Open **http://localhost:9120** — log in with default credentials.
+Open **http://localhost:9120** — enter your password to unlock.
 
 ## Environment Variables
 
@@ -43,17 +48,9 @@ Open **http://localhost:9120** — log in with default credentials.
 |----------|---------|-------------|
 | `OBSIDIAN_VAULT_PATH` | `~/Documents/Obsidian Vault` | Path to your vault folder |
 | `VAULT_VIEWER_PORT` | `9120` | HTTP port |
-| `VAULT_VIEWER_USER` | `hermes` | Basic auth username |
-| `VAULT_VIEWER_PASS` | `hermes` | Basic auth password |
-
-## Systemd Service
-
-```bash
-# Copy the service file
-sudo cp vaultview.service /etc/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now vaultview
-```
+| `VAULT_VIEWER_USER` | `hermes` | Auth username (legacy) |
+| `VAULT_VIEWER_PASS` | `hermes` | Password for unlock screen |
+| `VAULT_VIEWER_SECRET` | Random | Flask session secret |
 
 ## Architecture
 

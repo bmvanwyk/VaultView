@@ -52,6 +52,7 @@ graph TB
         TreeAPI["GET /api/tree<br/>Nested folder JSON"]
         BacklinkAPI["GET /api/backlinks/{name}<br/>Incoming links"]
         SearchRoute["GET /search?q=<br/>Full-text results"]
+        SearchAPI["GET /api/search?q=<br/>JSON results + snippets"]
     end
 
     subgraph "Data Layer"
@@ -79,6 +80,7 @@ graph TB
     Flask --> TreeAPI
     Flask --> BacklinkAPI
     Flask --> SearchRoute
+    Flask --> SearchAPI
 
     PageRoute --> Scanner
     PageRoute --> Markdown

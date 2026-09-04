@@ -11,7 +11,7 @@ A lightweight, self-hosted web viewer and editor for [Obsidian](https://obsidian
 - 📁 **Nested file tree** — folders expand/collapse, reflects vault structure
 - 🔗 **[[Wikilink]] support** — clickable internal links, self-links highlighted
 - 🔙 **Backlinks panel** — see which notes link to the current one (auto-hides when empty)
-- 🔍 **Full-text search** — with highlighted results across all notes
+- 🔍 **Full-text search** — live, debounced results with highlighted snippets across note names, tags, and content
 - 🕸️ **Interactive graph view** — hub-and-spoke layout, zoom and pan, click to navigate
 - ✏️ **Full-screen editor** — edit markdown with Ctrl+S, Esc to cancel
 - 🔓 **Session login** — dark-themed unlock screen, proper logout

@@ -4,7 +4,8 @@ VaultView — A lightweight web viewer for Obsidian vaults.
 Serves markdown with [[wikilink]] support, nested file tree,
 backlinks, and interactive graph view.
 """
-import os, re, json
+import os, re, json, html
+from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -276,6 +277,97 @@ def view_note(name):
     content = render_markdown(str(filepath), current)
     return render(current, content, notes)
 
+SNIPPET_CONTEXT = 60   # chars of context either side of a match
+SNIPPETS_PER_NOTE = 3  # max snippets shown per result
+
+def search_notes(notes, query):
+    """Return [{name, path, score, match_types, snippets}] for a query.
+
+    Searches note names, tags, and content. Snippets are HTML-escaped and
+    have match text wrapped in <mark>. Case-insensitive substring match —
+    deliberately simple, same as the rest of the data layer.
+    """
+    q = query.lower()
+    results = []
+    for name, data in notes.items():
+        path = Path(VAULT_PATH) / data['path']
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+
+        match_types = []
+        snippets = []
+        score = 0
+        if q in name.lower():
+            match_types.append('name')
+            score += 10
+        for tag in data.get('tags', []):
+            if q in tag.lower():
+                match_types.append('tag')
+                score += 5
+                break
+        if q in text.lower():
+            match_types.append('content')
+            content_count = text.lower().count(q)
+            score += content_count
+            # Collect snippets around each occurrence (max SNIPPETS_PER_NOTE)
+            for m in re.finditer(re.escape(query), text, flags=re.IGNORECASE):
+                if len(snippets) >= SNIPPETS_PER_NOTE:
+                    break
+                start = max(0, m.start() - SNIPPET_CONTEXT)
+                end = min(len(text), m.end() + SNIPPET_CONTEXT)
+                raw = text[start:end]
+                snippet = html.escape(raw)
+                # Escape the query too, then highlight it inside the escaped snippet
+                snippet = re.sub(
+                    f'({re.escape(html.escape(query))})',
+                    r'<mark>\1</mark>', snippet, flags=re.IGNORECASE)
+                if start > 0:
+                    snippet = '…' + snippet
+                if end < len(text):
+                    snippet = snippet + '…'
+                # Newlines read better in a <pre>-style block than mid-line gaps
+                snippet = snippet.replace('\n', ' ')
+                snippets.append(snippet)
+            if content_count > SNIPPETS_PER_NOTE:
+                snippets.append(f'<em>…{content_count - SNIPPETS_PER_NOTE} more match(es) in this note</em>')
+
+        if not match_types:
+            continue
+
+        if 'name' in match_types:
+            snippet_text = f'Note title matches "<strong>{html.escape(query)}</strong>".'
+        elif 'tag' in match_types and not snippets:
+            matched = [t for t in data.get('tags', []) if q in t.lower()]
+            snippet_text = f'Tagged <strong>#{html.escape(", #".join(matched))}</strong>.'
+        else:
+            snippet_text = ''
+        if snippet_text:
+            snippets.insert(0, snippet_text)
+
+        results.append({
+            'name': name,
+            'path': data['path'],
+            'score': score,
+            'match_types': match_types,
+            'count': text.lower().count(q),
+            'snippets': snippets,
+        })
+
+    # Best matches first: name matches > tag > content frequency
+    results.sort(key=lambda r: r['score'], reverse=True)
+    return results
+
+@app.route('/api/search')
+@requires_auth
+def api_search():
+    """JSON search endpoint — drives the live search on /search."""
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify([])
+    return jsonify(search_notes(scan_notes(), query))
+
 @app.route('/search')
 @requires_auth
 def search():
@@ -283,35 +375,36 @@ def search():
     notes = scan_notes()
     if not query:
         return redirect(url_for('index'))
-    
-    results = []
-    for name, data in notes.items():
-        path = Path(VAULT_PATH) / data['path']
-        text = path.read_text()
-        if query.lower() in text.lower() or query.lower() in name.lower():
-            idx = text.lower().find(query.lower())
-            start = max(0, idx - 60)
-            end = min(len(text), idx + len(query) + 60)
-            snippet = text[start:end]
-            if start > 0: snippet = '…' + snippet
-            if end < len(text): snippet = snippet + '…'
-            snippet = re.sub(f'({re.escape(query)})', r'<mark>\1</mark>', snippet, flags=re.IGNORECASE)
-            results.append({'name': name, 'snippet': snippet})
-    
+
+    results = search_notes(notes, query)
+
+    q_esc = html.escape(query)
     content_html = '<div class="search-results">'
     if results:
-        content_html += f'<p>{len(results)} result(s) for "<strong>{query}</strong>"</p>'
+        content_html += f'<p class="search-count">{len(results)} result(s) for "<strong>{q_esc}</strong>"</p>'
         for r in results:
-            content_html += f'<div class="search-result"><h3><a href="/note/{r["name"].replace(" ", "%20")}">{r["name"]}</a></h3><pre>{r["snippet"]}</pre></div>'
+            url = '/note/' + quote(r['name'])
+            name_esc = html.escape(r['name'])
+            badges = ''
+            for mt in r['match_types']:
+                badges += f'<span class="search-badge">{mt}</span>'
+            snippet_html = ''
+            for s in r['snippets']:
+                snippet_html += f'<pre>{s}</pre>'
+            content_html += (
+                f'<div class="search-result"><h3><a href="{url}">{name_esc}</a></h3>'
+                f'{badges}{snippet_html}</div>'
+            )
     else:
-        content_html += f'<p>No results for "<strong>{query}</strong>".</p>'
+        content_html += f'<p class="search-count">No results for "<strong>{q_esc}</strong>".</p>'
     content_html += '</div>'
-    
+
     return render(None, content_html, notes, query=query)
 
 def render(current, content, notes, query=""):
     """Render the full page template."""
     notes_list = [{'name': n, 'path': d['path']} for n, d in sorted(notes.items())]
+    query_esc = html.escape(query)
     
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -377,8 +470,7 @@ body {{
 .logout-link:hover {{ background: var(--hover); color: #f85149; }}
 /* ── Center: Content ── */
 .content {{
-  margin-left: 260px; padding: 32px 48px; max-width: 900px;
-}}
+  margin-left: 260px; padding: 32px 48px; max-width: 900px;}}
 .content h1 {{ font-size: 28px; color: var(--heading); margin-bottom: 16px; }}
 .content h2 {{ font-size: 20px; color: var(--heading); margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }}
 .content h3 {{ font-size: 16px; color: var(--heading); margin: 20px 0 8px; }}
@@ -486,6 +578,12 @@ body {{
 .saved-toast.show {{ opacity: 1; }}
 /* ── Search ── */
 .search-results p {{ margin-bottom: 16px; color: #8b949e; }}
+.search-count {{ font-size: 13px; margin-bottom: 16px; color: #8b949e; }}
+.search-badge {{
+  display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  padding: 1px 7px; border-radius: 10px; margin: 0 4px 6px 0;
+  background: #7c3aed33; color: #a78bfa; border: 1px solid #7c3aed66;
+}}
 .search-result {{
   background: var(--sidebar-bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 14px; margin-bottom: 10px;
@@ -527,16 +625,40 @@ mark {{ background: #bb800944; color: inherit; padding: 1px 3px; border-radius: 
   padding: 8px; text-align: center; font-size: 11px; color: #8b949e;
   border-top: 1px solid var(--border);
 }}
+.menu-toggle {{
+  display: none; position: fixed; top: 12px; left: 12px; z-index: 40;
+  width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--sidebar-bg); color: var(--text); font-size: 16px;
+  align-items: center; justify-content: center; cursor: pointer;
+  transition: left .25s ease;
+}}
+
+/* ── Mobile (<768px): stack vertically, sidebar becomes a top drawer ── */
+@media (max-width: 768px) {{
+  .sidebar {{
+    position: fixed; top: 0; left: -280px; width: 260px;
+    transition: left .25s ease; z-index: 30; height: 100vh;
+  }}
+  .sidebar.open {{ left: 0; box-shadow: 0 0 0 100vmax rgba(0,0,0,.5); }}
+  .content {{ margin-left: 0; padding: 64px 16px 32px; max-width: none; }}
+  .panel {{ display: none; }}
+  .graph-toggle {{ bottom: 16px; right: 16px; }}
+  .menu-toggle {{ display: flex; }}
+  body.menu-open .menu-toggle {{ left: 268px; }}
+}}
 </style>
 </head>
 <body>
+
+<!-- Mobile menu button -->
+<button class="menu-toggle" id="menuToggle" aria-label="Menu">☰</button>
 
 <!-- Left: File Tree -->
 <aside class="sidebar">
   <div class="sidebar-header">
     <h2>📓 Vault</h2>
     <form class="search-form" action="/search" method="get">
-      <input type="text" name="q" placeholder="Search…" value="{query}">
+      <input type="text" name="q" id="searchInput" placeholder="Search… ('/' to focus)" value="{query_esc}">
       <button>🔍</button>
     </form>
   </div>
@@ -594,14 +716,14 @@ mark {{ background: #bb800944; color: inherit; padding: 1px 3px; border-radius: 
 <!-- Mermaid JS for diagram rendering -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
-mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+mermaid.initialize({{ startOnLoad: true, theme: 'dark', themeVariables: {{
   primaryColor: '#7c3aed', primaryTextColor: '#c9d1d9',
   lineColor: '#58a6ff', secondaryColor: '#1a1a2e',
   tertiaryColor: '#161b22', background: '#0d1117',
   mainBkg: '#161b22', nodeBorder: '#30363d',
   clusterBkg: '#161b22', titleColor: '#f0f6fc',
   edgeLabelBackground: '#161b22'
-} });
+}} }});
 </script>
 
 <script>
@@ -612,6 +734,26 @@ document.querySelectorAll('.folder-name').forEach(el => {{
     if (children) children.classList.toggle('collapsed');
   }});
 }});
+
+// Mobile sidebar drawer
+const menuToggle = document.getElementById('menuToggle');
+if (menuToggle) {{
+  menuToggle.addEventListener('click', () => {{
+    const sidebar = document.querySelector('.sidebar');
+    const open = sidebar.classList.toggle('open');
+    document.body.classList.toggle('menu-open', open);
+    menuToggle.textContent = open ? '✕' : '☰';
+  }});
+  // Close drawer when a note/link is chosen
+  sidebar = document.querySelector('.sidebar');
+  sidebar.addEventListener('click', e => {{
+    if (e.target.closest('a')) {{
+      sidebar.classList.remove('open');
+      document.body.classList.remove('menu-open');
+      menuToggle.textContent = '☰';
+    }}
+  }});
+}}
 
 // Load backlinks
 const currentNote = "{current or ''}";
@@ -630,6 +772,60 @@ if (currentNote) {{
       }}
     }});
 }}
+
+// ── Live search (debounced /api/search fetch, only on the /search page) ──
+const searchInput = document.getElementById('searchInput');
+const isSearchPage = window.location.pathname === '/search';
+let searchTimer = null;
+
+if (isSearchPage && searchInput) {{
+  searchInput.addEventListener('input', () => {{
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (!q) {{
+      document.querySelector('.search-results').innerHTML =
+        '<p class="search-count">Type to search the vault…</p>';
+      return;
+    }}
+    searchTimer = setTimeout(() => liveSearch(q), 250);
+  }});
+}}
+
+function liveSearch(q) {{
+  fetch('/api/search?q=' + encodeURIComponent(q))
+    .then(r => r.json())
+    .then(results => {{
+      const box = document.querySelector('.search-results');
+      if (!box) return;
+      if (results.length === 0) {{
+        box.innerHTML = `<p class="search-count">No results for "<strong>${{esc(q)}}</strong>".</p>`;
+        return;
+      }}
+      let html = `<p class="search-count">${{results.length}} result(s) for "<strong>${{esc(q)}}</strong>"</p>`;
+      results.forEach(r => {{
+        const badges = r.match_types.map(mt => `<span class="search-badge">${{mt}}</span>`).join('');
+        const snips = r.snippets.map(s => `<pre>${{s}}</pre>`).join('');
+        html += `<div class="search-result"><h3><a href="/note/${{encodeURIComponent(r.name)}}">${{esc(r.name)}}</a></h3>${{badges}}${{snips}}</div>`;
+      }});
+      box.innerHTML = html;
+    }});
+}}
+
+function esc(s) {{
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}}
+
+// '/' focuses the search box (unless already typing in an input)
+window.addEventListener('keydown', function(e) {{
+  if (e.key !== '/' || searchInput === null) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  e.preventDefault();
+  searchInput.focus();
+  searchInput.select();
+}});
 
 // Graph view with zoom + pan
 let graphData = null;

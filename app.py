@@ -738,8 +738,8 @@ document.querySelectorAll('.folder-name').forEach(el => {{
 // Mobile sidebar drawer
 const menuToggle = document.getElementById('menuToggle');
 if (menuToggle) {{
+  const sidebar = document.querySelector('.sidebar');
   menuToggle.addEventListener('click', () => {{
-    const sidebar = document.querySelector('.sidebar');
     const open = sidebar.classList.toggle('open');
     document.body.classList.toggle('menu-open', open);
     menuToggle.textContent = open ? '✕' : '☰';

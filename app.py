@@ -745,7 +745,6 @@ if (menuToggle) {{
     menuToggle.textContent = open ? '✕' : '☰';
   }});
   // Close drawer when a note/link is chosen
-  sidebar = document.querySelector('.sidebar');
   sidebar.addEventListener('click', e => {{
     if (e.target.closest('a')) {{
       sidebar.classList.remove('open');

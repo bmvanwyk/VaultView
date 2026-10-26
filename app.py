@@ -594,14 +594,14 @@ mark {{ background: #bb800944; color: inherit; padding: 1px 3px; border-radius: 
 <!-- Mermaid JS for diagram rendering -->
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
-mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: {
+mermaid.initialize({{ startOnLoad: true, theme: 'dark', themeVariables: {{
   primaryColor: '#7c3aed', primaryTextColor: '#c9d1d9',
   lineColor: '#58a6ff', secondaryColor: '#1a1a2e',
   tertiaryColor: '#161b22', background: '#0d1117',
   mainBkg: '#161b22', nodeBorder: '#30363d',
   clusterBkg: '#161b22', titleColor: '#f0f6fc',
   edgeLabelBackground: '#161b22'
-} });
+}} }});
 </script>
 
 <script>

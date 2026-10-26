@@ -10,15 +10,15 @@ This is a **single-file Flask app** with inline HTML/CSS/JS. There is no build s
 # Start with a test vault
 OBSIDIAN_VAULT_PATH=/tmp/test-vault python3 app.py
 
-# Run health check
-curl -s -u hermes:hermes http://localhost:9120/health
+# Log in and save the session cookie
+curl -s -c cookie.txt -d "password=hermes" http://localhost:9120/login
 
 # Test APIs
-curl -s -u hermes:hermes http://localhost:9120/api/graph | python3 -m json.tool
-curl -s -u hermes:hermes http://localhost:9120/api/tree | python3 -m json.tool
+curl -s -b cookie.txt http://localhost:9120/api/graph | python3 -m json.tool
+curl -s -b cookie.txt http://localhost:9120/api/tree | python3 -m json.tool
 
 # Test page rendering
-curl -s -u hermes:hermes http://localhost:9120/ | grep -c "Home"
+curl -s -b cookie.txt http://localhost:9120/ | grep -c "Home"
 ```
 
 **Always verify:** after any change, load `http://localhost:9120` in a real browser and check:
@@ -50,7 +50,7 @@ curl -s -u hermes:hermes http://localhost:9120/ | grep -c "Home"
 
 4. **`build_file_tree()` returns nested dicts.** Folders are dicts, `.md` files are leaf string values (note name). The template's `_render_file_tree()` converts to HTML recursively.
 
-5. **Auth is stateless basic auth.** No sessions, no cookies, no CSRF tokens. `requires_auth` decorator checks `Authorization` header on every request.
+5. **Auth is a Flask session cookie.** `requires_auth` checks `session.get('logged_in')` on every request; unauthenticated requests redirect to `/login`, where a form POST (password) sets the session. `app.secret_key` comes from the `VAULT_VIEWER_SECRET` env var. No basic auth, no CSRF tokens.
 
 ### Frontend (inline JS in the template)
 
